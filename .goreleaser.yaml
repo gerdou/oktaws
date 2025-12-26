@@ -24,21 +24,21 @@ archives:
       - goos: windows
         format: zip
 brews:
-  - url_template: "https://github.com/vahid-haghighat/oktaws/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+  - url_template: "https://github.com/gerdou/oktaws/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
     download_strategy: CurlDownloadStrategy
     commit_author:
-      name: oktaws release bot
-      email: bot@goreleaser.com
-    homepage: "https://github.com/vahid-haghighat/oktaws"
+      name: gerdou-app[bot]
+      email: 2530509+gerdou-app[bot]@users.noreply.github.com
+    homepage: "https://github.com/gerdou/oktaws"
     description: "Helps getting aws cli credentials using okta"
     license: "MIT"
     test: system "#{bin}/oktaws --version"
     install: bin.install "oktaws"
     repository:
-      owner: brewdex
+      owner: gerdou
       name: homebrew-oktaws
       branch: main
-      token: "{{ .Env.BREWDEX_GITHUB_TOKEN }}"
+      token: "{{ .Env.GITHUB_TOKEN }}"
 changelog:
   sort: asc
   filters:
