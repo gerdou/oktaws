@@ -1,15 +1,15 @@
 # oktaws
 
-A CLI tool to obtain AWS credentials via Okta authentication, supporting both OIDC and SAML workflows.
+A CLI tool to obtain AWS credentials using Okta. Supports both OIDC device authorization and a browser-based SAML flow.
 
 ## Features
 
-- **OIDC Device Flow**: Authenticate using Okta OIDC with device authorization
-- **SAML Browser Flow**: Seamless browser-based SAML authentication with automatic credential capture
-- **Flexible Configuration**: Configure via YAML file, environment variables, or CLI flags
-- **Multiple Output Formats**: Export credentials as JSON or environment variables
-- **AWS Credentials File**: Automatically write to `~/.aws/credentials`
-- **Browser Extension**: Auto-installs Chrome/Firefox extension for SAML interception
+- OIDC device authorization flow (Okta device code)
+- Browser-based SAML flow with a local callback server and a Chrome/Firefox extension
+- Configuration via YAML file, environment variables, or CLI flags
+- Writes AWS credentials to `~/.aws/credentials` using the selected profile (default: `default`)
+- Optional access-token cache file for OIDC (`~/.okta/awscli/cache.json`)
+- Debug and API debug logging
 
 ## Installation
 
@@ -25,14 +25,22 @@ go build -o oktaws
 ./oktaws config init
 ```
 
-This creates `~/.config/oktaws/config.yaml` with default values.
+This creates `~/.config/oktaws/config.yaml` with defaults and prompts.
 
 ### 2. Set Your Okta Configuration
 
+For SAML browser flow:
+
 ```bash
 ./oktaws config set org_domain your-org.okta.com
-./oktaws config set aws_acct_fed_app_id your-app-id
-./oktaws config set aws_region us-east-1
+./oktaws config set aws_acct_fed_app_id exkXXXXXXXXXXXXXXXX
+```
+
+For OIDC device flow:
+
+```bash
+./oktaws config set org_domain your-org.okta.com
+./oktaws config set oidc_client_id your-client-id
 ```
 
 ### 3. Authenticate
@@ -41,11 +49,13 @@ This creates `~/.config/oktaws/config.yaml` with default values.
 ./oktaws
 ```
 
-On first run, the CLI will:
-1. Detect your default browser (Chrome or Firefox)
-2. Guide you through a one-time extension installation
-3. Open your browser to Okta
-4. Automatically capture SAML and fetch AWS credentials
+With `auth_flow: auto`, the CLI chooses:
+
+1. OIDC if `oidc_client_id` is set
+2. SAML browser flow if `aws_acct_fed_app_id` is set
+3. OIDC if neither is set
+
+On success, credentials are written to `~/.aws/credentials` under the configured profile.
 
 ## Configuration
 
@@ -54,14 +64,27 @@ On first run, the CLI will:
 Location: `~/.config/oktaws/config.yaml`
 
 ```yaml
+auth_flow: auto
 org_domain: your-org.okta.com
+oidc_client_id: ""
 aws_acct_fed_app_id: exkXXXXXXXXXXXXXXXX
+aws_iam_role: ""
+aws_iam_idp: ""
 aws_region: us-east-1
-session_duration: 43200  # 12 hours
-auth_flow: saml-browser  # or "oidc" or "auto"
+session_duration: 3600
 profile: default
-format: env-var  # or "json"
+format: json
+open_browser: false
+open_browser_command: ""
+write_aws_credentials: false
+cache_access_token: false
+qr_code: false
+all_profiles: false
+debug: false
+debug_api_calls: false
 ```
+
+Valid `format` values are `json` and `env`. See the Output section for current behavior.
 
 ### Configuration Commands
 
@@ -86,25 +109,40 @@ format: env-var  # or "json"
 3. Config file
 4. Defaults (lowest priority)
 
+### Environment Variables
+
+The following environment variables are read as defaults for string flags:
+
+- `OKTA_AWSCLI_ORG_DOMAIN`
+- `OKTA_AWSCLI_OIDC_CLIENT_ID`
+- `OKTA_AWSCLI_IAM_ROLE`
+- `OKTA_AWSCLI_IAM_IDP`
+- `OKTA_AWSCLI_AWS_ACCOUNT_FEDERATION_APP_ID`
+- `OKTA_AWSCLI_PROFILE`
+- `OKTA_AWSCLI_SESSION_DURATION`
+- `OKTA_AWSCLI_FORMAT`
+- `OKTA_AWSCLI_AWS_REGION`
+- `OKTA_AWSCLI_BROWSER_COMMAND`
+
 ## Authentication Flows
 
-### SAML Browser Flow (Recommended)
+### SAML Browser Flow (Recommended for interactive use)
 
 ```bash
 ./oktaws --auth-flow saml-browser
 ```
 
 Best for:
-- Users without Okta admin access
-- Standard AWS/Okta SAML SSO setup
-- Interactive workflows
+- Users with a standard Okta AWS SAML application
+- Interactive, browser-based workflows
 
-**How it works:**
-1. Starts a local callback server
-2. Opens your browser to Okta
-3. Browser extension intercepts SAML assertion
-4. CLI receives SAML and calls AWS STS
-5. Outputs AWS credentials
+How it works:
+1. Starts a local callback server on `127.0.0.1:8765`
+2. Ensures the browser extension is installed
+3. Opens your browser to Okta
+4. Extension captures the SAML assertion and POSTs it to the CLI
+5. CLI exchanges SAML for AWS STS credentials
+6. Credentials are written to `~/.aws/credentials`
 
 ### OIDC Device Flow
 
@@ -113,72 +151,62 @@ Best for:
 ```
 
 Best for:
-- CI/CD environments
-- Headless servers
+- CI/CD or headless environments
 - When you have an OIDC client configured in Okta
 
-**How it works:**
-1. Generates a device code
-2. Displays URL and code for user authorization
-3. Polls Okta for access token
-4. Exchanges token for SAML assertion
-5. Calls AWS STS for credentials
+How it works:
+1. Requests a device code from Okta
+2. Prints the verification URL and user code
+3. Optionally opens the browser when `--open-browser` is set
+4. Polls for an access token
+5. Uses the token to fetch a SAML assertion
+6. Exchanges SAML for AWS STS credentials
+7. Credentials are written to `~/.aws/credentials`
+
+Optional:
+- `--cache-access-token` writes a cache file to `~/.okta/awscli/cache.json`
 
 ## CLI Flags
 
 ### Authentication
-- `--auth-flow string` - Authentication flow: `auto`, `oidc`, or `saml-browser` (default: auto)
-- `--org-domain string` - Okta organization domain
-- `--oidc-client-id string` - OIDC client ID (for OIDC flow)
-- `--aws-acct-fed-app-id string` - AWS Account Federation app ID
+
+- `--auth-flow`, `-x`: `auto`, `oidc`, or `saml-browser` (default: `auto`)
+- `--org-domain`, `-o`: Okta organization domain
+- `--oidc-client-id`, `-c`: OIDC client ID (required for OIDC flow)
+- `--aws-acct-fed-app-id`, `-a`: AWS Account Federation app ID (required for SAML flow)
+- `--aws-iam-role`, `-r`: AWS IAM role ARN or substring (used to pick a role)
+- `--aws-iam-idp`, `-i`: AWS IAM identity provider ARN (currently unused)
 
 ### AWS Configuration
-- `--aws-region string` - AWS region (default: us-east-1)
-- `--aws-iam-role string` - AWS IAM role ARN (optional, will prompt if multiple)
-- `--aws-session-duration string` - Session duration in seconds (default: 3600)
+
+- `--aws-region`, `-n`: AWS region (config init defaults to `us-east-1`)
+- `--aws-session-duration`, `-s`: Session duration in seconds (default: `3600`)
 
 ### Output
-- `--format string` - Output format: `env-var` or `json` (default: env-var)
-- `--profile string` - AWS profile name (default: default)
-- `--write-aws-credentials` - Write to `~/.aws/credentials`
+
+- `--profile`, `-p`: AWS profile name (default: `default`)
+- `--format`, `-f`: Output format `json` or `env`
+- `--write-aws-credentials`, `-w`: Write to `~/.aws/credentials` (see Output section)
+- `--all-profiles`, `-k`: Collect all profiles (currently unused)
 
 ### Browser
-- `--open-browser` - Open browser automatically (default: true for SAML flow)
-- `--open-browser-command string` - Custom browser command
+
+- `--open-browser`, `-b`: Open browser automatically for OIDC device flow (default: `false`)
+- `--open-browser-command`, `-m`: Custom browser command
 
 ### Other
-- `--debug` - Enable debug output
-- `--debug-api-calls` - Debug API calls
 
-## Output Formats
+- `--qr-code`, `-q`: Display QR code (currently unused)
+- `--cache-access-token`, `-e`: Cache access token to `~/.okta/awscli/cache.json`
+- `--debug`, `-g`: Enable debug output
+- `--debug-api-calls`, `-d`: Debug Okta API calls
+- `--version`, `-v`: Print version and exit
 
-### Environment Variables (default)
+## Output
 
-```bash
-export AWS_ACCESS_KEY_ID="ASIA..."
-export AWS_SECRET_ACCESS_KEY="..."
-export AWS_SESSION_TOKEN="..."
-```
+By default, oktaws writes credentials to `~/.aws/credentials` under the selected profile and exits. The profile defaults to `default`.
 
-Use with:
-```bash
-eval $(./oktaws)
-```
-
-### JSON
-
-```bash
-./oktaws --format json
-```
-
-```json
-{
-  "AccessKeyId": "ASIA...",
-  "SecretAccessKey": "...",
-  "SessionToken": "...",
-  "Expiration": "2025-10-07T07:50:15Z"
-}
-```
+The `--format` flag only applies when credentials are not written to file. With the current defaults, the file write path is always taken because a profile is always set. If you need stdout output (`json` or `env`), you will need to clear the profile in configuration and disable `--write-aws-credentials`.
 
 ### AWS Credentials File
 
@@ -187,6 +215,7 @@ eval $(./oktaws)
 ```
 
 Writes to `~/.aws/credentials`:
+
 ```ini
 [my-profile]
 aws_access_key_id = ASIA...
@@ -194,40 +223,62 @@ aws_secret_access_key = ...
 aws_session_token = ...
 ```
 
+### JSON (stdout)
+
+```bash
+./oktaws --format json
+```
+
+### Environment Variables (stdout)
+
+```bash
+./oktaws --format env
+```
+
+Use with:
+
+```bash
+eval $(./oktaws --format env)
+```
+
+Note: Stdout output is only used when file writing is disabled as described above.
+
 ## Browser Extension
 
-The SAML browser flow requires a browser extension that automatically captures SAML assertions.
+The SAML browser flow requires a browser extension that captures SAML assertions.
 
 ### First-Time Setup
 
 When you first run with `--auth-flow saml-browser`, the CLI will:
 
-1. **Detect your browser** (Chrome or Firefox)
-2. **Extract extension files** to `~/.config/oktaws/extension/`
-3. **Enable Chrome Developer Mode** (if using Chrome)
-4. **Open the extensions page** in your browser
-5. **Guide you through installation** (one click: "Load unpacked")
+1. Detect your browser (Chrome or Firefox)
+2. Extract extension files to `~/.config/oktaws/extension/`
+3. Attempt to enable Chrome Developer Mode (Chrome only)
+4. Open the extensions page in your browser
+5. Guide you through installation
+
+Firefox note: the installer uses `about:debugging` and loads a temporary add-on, which must be reloaded after Firefox restarts.
 
 ### Supported Browsers
 
 - Google Chrome
 - Mozilla Firefox
 
-Other browsers are not currently supported.
-
 ### Extension Permissions
 
 The extension requires:
-- Access to Okta domains (`*.okta.com`, `*.okta-emea.com`)
-- Access to AWS signin (`*.signin.aws.amazon.com`)
-- Network request interception (to capture SAML)
-- Local storage (to save CLI port)
+
+- Okta domains: `*.okta.com`, `*.okta-emea.com`, `*.oktapreview.com`
+- AWS sign-in and console: `*.signin.aws.amazon.com`, `*.console.aws.amazon.com`
+- Localhost access: `http://localhost:*`
+- Network request interception and storage
 
 ## Finding Your Configuration Values
 
 ### Okta Organization Domain
 
 Your Okta domain is in the URL when you log into Okta:
+
 ```
 https://your-org.okta.com
          ^^^^^^^^^^^^^^^^
@@ -238,6 +289,7 @@ https://your-org.okta.com
 1. Log into Okta
 2. Navigate to your AWS tile
 3. Look at the URL:
+
 ```
 https://your-org.okta.com/app/amazon_aws/exkXXXXXXXXXXXXXXXX/sso/saml
                                          ^^^^^^^^^^^^^^^^^^^^
@@ -256,20 +308,27 @@ Ask your Okta administrator to create an OIDC client for you and provide the cli
 ./oktaws config set org_domain my-company.okta.com
 ./oktaws config set aws_acct_fed_app_id exk123456789
 
-# Get credentials
-eval $(./oktaws)
+# Get credentials (writes to ~/.aws/credentials)
+./oktaws
 
 # Use AWS CLI
-aws s3 ls
+aws s3 ls --profile default
 ```
 
-### Example 2: Multiple AWS profiles
+### Example 2: OIDC device flow
+
+```bash
+./oktaws --auth-flow oidc --oidc-client-id 0oa123456789 --open-browser --cache-access-token
+aws sts get-caller-identity --profile default
+```
+
+### Example 3: Multiple AWS profiles
 
 ```bash
 # Dev account
 ./oktaws --profile dev --aws-acct-fed-app-id exkDEV123 --write-aws-credentials
 
-# Prod account  
+# Prod account
 ./oktaws --profile prod --aws-acct-fed-app-id exkPROD456 --write-aws-credentials
 
 # Use profiles
@@ -277,43 +336,36 @@ aws s3 ls --profile dev
 aws s3 ls --profile prod
 ```
 
-### Example 3: Long-lived session
+### Example 4: Long-lived session
 
 ```bash
 ./oktaws --aws-session-duration 43200  # 12 hours
 ```
 
-### Example 4: Specific role selection
+### Example 5: Specific role selection
 
 ```bash
 ./oktaws --aws-iam-role admin-role
-```
-
-### Example 5: JSON output for scripting
-
-```bash
-CREDS=$(./oktaws --format json)
-ACCESS_KEY=$(echo $CREDS | jq -r '.AccessKeyId')
-echo "Access Key: $ACCESS_KEY"
 ```
 
 ## Troubleshooting
 
 ### Extension not detected
 
-**Issue**: CLI says extension is not installed, but you installed it.
+Issue: CLI says extension is not installed, but you installed it.
 
-**Solution**: 
-- Make sure Chrome is running
-- Verify the extension is enabled in `chrome://extensions/`
+Solution:
+- Make sure Chrome or Firefox is running
+- Verify the extension is enabled
 - The extension name should be "Oktaws SAML Interceptor"
-- Try restarting Chrome after installation
+- Try restarting the browser after installation
 
 ### Port already in use
 
-**Issue**: `bind: address already in use` on port 8765
+Issue: `bind: address already in use` on port 8765
 
-**Solution**:
+Solution:
+
 ```bash
 # Kill the process using the port
 lsof -ti:8765 | xargs kill -9
@@ -321,57 +373,56 @@ lsof -ti:8765 | xargs kill -9
 
 ### SAML not captured
 
-**Issue**: Browser opens but SAML is never received.
+Issue: Browser opens but SAML is never received.
 
-**Solution**:
+Solution:
 - Check browser console for `[Oktaws]` messages
-- Verify extension is loaded: `chrome://extensions/`
+- Verify extension is loaded
 - Try reloading the extension
 - Make sure you're authenticating (not already logged into AWS)
 
 ### Extension permissions error
 
-**Issue**: Extension needs additional permissions.
+Issue: Extension needs additional permissions.
 
-**Solution**:
+Solution:
 - Click the extension icon in your browser
 - Grant the requested permissions
 - Refresh the Okta page
 
 ### Multiple roles available
 
-**Issue**: You have access to multiple AWS roles.
+Issue: You have access to multiple AWS roles.
 
-**Solution**:
+Solution:
 - CLI will prompt you to select a role
 - Or specify with `--aws-iam-role role-name`
 - Add to config file to avoid prompts:
-  ```yaml
-  aws_iam_role: admin-role
-  ```
 
-### Browser doesn't open
+```yaml
+aws_iam_role: admin-role
+```
 
-**Issue**: CLI doesn't open browser automatically.
+### Browser does not open
 
-**Solution**:
-- CLI will print the URL - open it manually
-- Or set a custom browser: `--open-browser-command "/path/to/browser"`
+Issue: The browser does not open automatically during OIDC device flow.
+
+Solution:
+- Use `--open-browser` to enable auto-open
+- Or set a custom browser command: `--open-browser-command "/path/to/browser"`
 
 ## Security Notes
 
-- **Credentials**: Never commit your config file with credentials to version control
-- **Extensions**: The extension only runs on Okta and AWS domains
-- **Local server**: The callback server only listens on localhost (127.0.0.1)
-- **No data storage**: SAML assertions are not stored, only used in memory
-- **Token caching**: Optional, disabled by default (`--cache-access-token` to enable)
+- Credentials are written to `~/.aws/credentials` by default
+- The extension only runs on Okta and AWS domains listed above
+- The callback server only listens on localhost (`127.0.0.1`)
+- SAML assertions are only used in memory
+- Access token caching is optional and writes to `~/.okta/awscli/cache.json`
 
 ## Contributing
 
-Issues and pull requests are welcome!
+Issues and pull requests are welcome.
 
 ## License
 
 MIT
-
-
