@@ -564,14 +564,3 @@ func CheckExtensionInstalled(browserType BrowserType) bool {
 
 	return false
 }
-
-func IsExtensionInstalledInBrowser(browserType BrowserType) bool {
-	extPath, err := GetExtensionPath()
-	if err != nil {
-		return false
-	}
-
-	manifestPath := filepath.Join(extPath, "manifest.json")
-	_, err = os.Stat(manifestPath)
-	return err == nil
-}

@@ -32,7 +32,8 @@ func (a *Authenticator) AuthenticateWithBrowser() error {
 	}
 	defer server.Shutdown()
 
-	extInstalled := IsExtensionInstalledInBrowser(browserType)
+	extInstalled := CheckExtensionInstalled(browserType)
+	log.Printf("Extension running in browser: %v", extInstalled)
 
 	if !extInstalled {
 		log.Printf("Extension not detected. Installing...")
