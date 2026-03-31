@@ -13,6 +13,15 @@ A CLI tool to obtain AWS credentials using Okta. Supports both OIDC device autho
 
 ## Installation
 
+### Homebrew
+
+```bash
+brew tap gerdou/oktaws
+brew install oktaws
+```
+
+### Build from source
+
 ```bash
 go build -o oktaws
 ```
